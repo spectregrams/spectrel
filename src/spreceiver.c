@@ -66,13 +66,6 @@ static bool is_value_in_ranges(double value,
     for (size_t i = 0; i < range_count; i++)
     {
         SoapySDRRange range = ranges[i];
-        if (range.minimum == range.maximum)
-        {
-            if (value == range.minimum)
-            {
-                return true;
-            }
-        }
         if (value >= range.minimum && value <= range.maximum)
         {
             return true;
@@ -86,182 +79,220 @@ static bool is_value_in_range(double value, const SoapySDRRange *range)
     return value >= range->minimum && value <= range->maximum;
 }
 
+static const char *get_format(const char *driver)
+{
+    if (strcmp(driver, "rtlsdr") == 0)
+    {
+        return "CF32";
+    }
+    else if (strcmp(driver, "hackrf") == 0)
+    {
+        return "CF64";
+    }
+    else if (strcmp(driver, "SDDC") == 0)
+    {
+        return "CF32";
+    }
+    else
+    {
+        return SPECTREL_DEFAULT_FORMAT;
+    }
+}
+
+static bool match(const char *string, char **strings, size_t num_strings)
+{
+    for (size_t n = 0; n < num_strings; n++)
+    {
+        if (strcmp(string, strings[n]) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 spectrel_receiver spectrel_make_receiver(const char *driver,
                                          spectrel_receiver_params_t *params)
 {
 
-    // Prepare receiver structure with safe initial values.
+    int status = SPECTREL_FAILURE;
+
     spectrel_receiver receiver = malloc(sizeof(*receiver));
     if (!receiver)
     {
         spectrel_print_error("malloc failed: receiver");
         return NULL;
     }
+
     receiver->device = NULL;
     receiver->rx_stream = NULL;
+    receiver->format = NULL;
 
-    // Make the soapy device for the receiver.
+    size_t range_size = 0;
+    SoapySDRRange *frequency_ranges = NULL;
+    SoapySDRRange *sample_rate_ranges = NULL;
+    SoapySDRRange *bandwidth_ranges = NULL;
+
+    size_t num_formats = 0;
+    char **formats = NULL;
+
+    // Make the Soapy device.
     SoapySDRKwargs args = {};
     if (SoapySDRKwargs_set(&args, "driver", driver) != 0)
     {
-        spectrel_print_error("set fail");
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
-        return NULL;
+        spectrel_print_error("set failed: Allocation error");
+        goto cleanup;
     }
     receiver->device = SoapySDRDevice_make(&args);
     SoapySDRKwargs_clear(&args);
+
     if (!receiver->device)
     {
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
-        spectrel_print_error("Device creation failed: %s",
-                             SoapySDRDevice_lastError());
-        return NULL;
+        spectrel_print_error("make failed: %s", SoapySDRDevice_lastError());
+        goto cleanup;
     }
 
-    size_t range_size = 0;
-
-    // Set the frequency, first checking it's in range.
-    SoapySDRRange *frequency_ranges = SoapySDRDevice_getFrequencyRange(
+    // Set device parameters. For each, first validate it against device info if
+    // it's available. If there's no device info, just try and set it anyway.
+    frequency_ranges = SoapySDRDevice_getFrequencyRange(
         receiver->device, SOAPY_SDR_RX, 0, &range_size);
-    if (!frequency_ranges || range_size == 0)
+    if (!frequency_ranges)
     {
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("getFrequencyRange failed: %s",
                              SoapySDRDevice_lastError());
-        return NULL;
+        goto cleanup;
     }
-    if (!is_value_in_ranges(params->frequency, frequency_ranges, range_size))
+    if (range_size > 0 &&
+        !is_value_in_ranges(params->frequency, frequency_ranges, range_size))
     {
-        SoapySDR_free(frequency_ranges);
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("Invalid frequency: %lf [Hz]", params->frequency);
-        return NULL;
+        goto cleanup;
     }
-    SoapySDR_free(frequency_ranges);
     if (SoapySDRDevice_setFrequency(
             receiver->device, SOAPY_SDR_RX, 0, params->frequency, NULL) != 0)
     {
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("setFrequency failed: %s",
                              SoapySDRDevice_lastError());
-        return NULL;
+        goto cleanup;
     }
 
-    // Set the sample rate, first checking it's in range.
-    range_size = 0;
-    SoapySDRRange *sample_rate_ranges = SoapySDRDevice_getSampleRateRange(
+    sample_rate_ranges = SoapySDRDevice_getSampleRateRange(
         receiver->device, SOAPY_SDR_RX, 0, &range_size);
-    if (!sample_rate_ranges || range_size == 0)
+    if (!sample_rate_ranges)
     {
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
-        spectrel_print_error("getSampleRateRange failed: %s",
+        spectrel_print_error("getSampleRateRange fail: %s",
                              SoapySDRDevice_lastError());
-        return NULL;
+        goto cleanup;
     }
-    if (!is_value_in_ranges(
-            params->sample_rate, sample_rate_ranges, range_size))
+    if (range_size > 0 && !is_value_in_ranges(params->sample_rate,
+                                              sample_rate_ranges,
+                                              range_size))
     {
-        SoapySDR_free(sample_rate_ranges);
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("Invalid sample rate: %lf [Hz]",
                              params->sample_rate);
-        return NULL;
+        goto cleanup;
     }
-    SoapySDR_free(sample_rate_ranges);
-
     if (SoapySDRDevice_setSampleRate(
             receiver->device, SOAPY_SDR_RX, 0, params->sample_rate) != 0)
     {
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("setSampleRate failed: %s",
                              SoapySDRDevice_lastError());
-        return NULL;
+        goto cleanup;
     }
 
-    // Set the bandwidth, first checking it's in range.
-    range_size = 0;
-    SoapySDRRange *bandwidth_ranges = SoapySDRDevice_getBandwidthRange(
+    // Set the bandwidth.
+    bandwidth_ranges = SoapySDRDevice_getBandwidthRange(
         receiver->device, SOAPY_SDR_RX, 0, &range_size);
-    if (!bandwidth_ranges || range_size == 0)
+    if (!bandwidth_ranges)
     {
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("getBandwidthRange failed: %s",
                              SoapySDRDevice_lastError());
-        return NULL;
+        goto cleanup;
     }
-    if (!is_value_in_ranges(params->bandwidth, bandwidth_ranges, range_size))
+    if (range_size > 0 &&
+        !is_value_in_ranges(params->bandwidth, bandwidth_ranges, range_size))
     {
-        SoapySDR_free(bandwidth_ranges);
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("Invalid bandwidth: %lf [Hz]", params->bandwidth);
-        return NULL;
+        goto cleanup;
     }
-    SoapySDR_free(bandwidth_ranges);
     if (SoapySDRDevice_setBandwidth(
             receiver->device, SOAPY_SDR_RX, 0, params->bandwidth) != 0)
     {
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("setBandwidth failed: %s",
                              SoapySDRDevice_lastError());
-        return NULL;
+        goto cleanup;
     }
 
-    // Set the gain, first checking it's in range.
     SoapySDRRange gain_range =
         SoapySDRDevice_getGainRange(receiver->device, SOAPY_SDR_RX, 0);
     if (!is_value_in_range(params->gain, &gain_range))
     {
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("Invalid gain: %lf [dB]", params->gain);
-        return NULL;
+        goto cleanup;
     }
     if (SoapySDRDevice_setGain(
             receiver->device, SOAPY_SDR_RX, 0, params->gain) != 0)
     {
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("setGain failed: %s", SoapySDRDevice_lastError());
-        return NULL;
+        goto cleanup;
     }
 
-    // Infer the format from the driver.
-    char *format;
-    if (strcmp(driver, "rtlsdr") == 0)
+    // TODO: Make the stream format configurable.
+    const char *format = get_format(driver);
+    formats = SoapySDRDevice_getStreamFormats(
+        receiver->device, SOAPY_SDR_RX, 0, &num_formats);
+    if (!formats)
     {
-        format = "CF32";
+        spectrel_print_error("getStreamFormats failed: %s",
+                             SoapySDRDevice_lastError());
+        goto cleanup;
     }
-    else if (strcmp(driver, "hackrf") == 0)
+    if (num_formats > 0 && !match(format, formats, num_formats))
     {
-        format = "CF64";
+        spectrel_print_error("Invalid format: %s", format);
+        goto cleanup;
     }
-    else
-    {
-        format = SPECTREL_DEFAULT_FORMAT;
-    }
+
     receiver->format = strdup(format);
+    if (!receiver->format)
+    {
+        spectrel_print_error("strdup failed: format");
+        goto cleanup;
+    }
 
     // Set up the stream.
     receiver->rx_stream = SoapySDRDevice_setupStream(
         receiver->device, SOAPY_SDR_RX, receiver->format, NULL, 0, NULL);
     if (!receiver->rx_stream)
     {
-        spectrel_free_receiver(receiver);
-        receiver = NULL;
         spectrel_print_error("setupStream failed: %s",
                              SoapySDRDevice_lastError());
-        return NULL;
+        goto cleanup;
+    }
+
+    status = SPECTREL_SUCCESS;
+
+cleanup:
+    if (formats)
+    {
+        SoapySDRStrings_clear(&formats, num_formats);
+    }
+    if (bandwidth_ranges)
+    {
+        SoapySDR_free(bandwidth_ranges);
+    }
+    if (sample_rate_ranges)
+    {
+        SoapySDR_free(sample_rate_ranges);
+    }
+    if (frequency_ranges)
+    {
+        SoapySDR_free(frequency_ranges);
+    }
+    if (status != SPECTREL_SUCCESS && receiver)
+    {
+        spectrel_free_receiver(receiver);
+        receiver = NULL;
     }
     return receiver;
 }
@@ -337,7 +368,7 @@ int spectrel_read_stream(spectrel_receiver receiver, spectrel_signal_t *buffer)
 
             if (ret < 1)
             {
-                spectrel_print_error("readStream failed: %s\n",
+                spectrel_print_error("readStream failed: %s",
                                      SoapySDRDevice_lastError());
                 return SPECTREL_FAILURE;
             }
@@ -371,7 +402,7 @@ int spectrel_read_stream(spectrel_receiver receiver, spectrel_signal_t *buffer)
             if (ret < 1)
             {
                 const char *error = SoapySDRDevice_lastError();
-                spectrel_print_error("readStream failed: %s\n", error);
+                spectrel_print_error("readStream failed: %s", error);
                 free(buffer_cf32);
                 buffer_cf32 = NULL;
                 return SPECTREL_FAILURE;
@@ -395,9 +426,10 @@ void spectrel_describe_receiver(spectrel_receiver receiver)
 {
     spectrel_receiver_params_t params = {};
     spectrel_get_parameters(receiver, &params);
-    printf("Frequency: %.4lf [Hz]\n", params.frequency);
-    printf("Sample rate: %.4lf [Hz]\n", params.sample_rate);
-    printf("Bandwidth: %.4lf [Hz]\n", params.bandwidth);
-    printf("Gain: %.4lf [dB]\n", params.gain);
-    printf("Format: %s\n", receiver->format);
+    printf("Parameters set:\n");
+    printf("  Frequency: %.4lf [Hz]\n", params.frequency);
+    printf("  Sample rate: %.4lf [Hz]\n", params.sample_rate);
+    printf("  Bandwidth: %.4lf [Hz]\n", params.bandwidth);
+    printf("  Gain: %.4lf [dB]\n", params.gain);
+    printf("  Format: %s\n", receiver->format);
 }
