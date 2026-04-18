@@ -86,3 +86,8 @@ Record spectrograms for 10 seconds at 445MHz, at the maximum sample rate for a H
 ```
 spectrel -r hackrf -f 445000000 -s 20000000 -b 20000000 -g 20 -T 10 -d ./recordings
 ```
+
+Record spectrograms for 0.25 seconds at 32MHz, at the maximum sample rate for the RX-888 MK II (64MHz):
+```
+spectrel -r SDDC -f 32000000 -s 64000000 -b 64000000 -g 56 -T 0.25
+```
