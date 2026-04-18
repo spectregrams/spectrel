@@ -172,7 +172,7 @@ spectrel_receiver spectrel_make_receiver(const char *driver,
     if (SoapySDRDevice_setFrequency(
             receiver->device, SOAPY_SDR_RX, 0, params->frequency, NULL) != 0)
     {
-        spectrel_print_error("setFrequency fail: %s",
+        spectrel_print_error("setFrequency failed: %s",
                              SoapySDRDevice_lastError());
         goto cleanup;
     }
@@ -181,7 +181,7 @@ spectrel_receiver spectrel_make_receiver(const char *driver,
         receiver->device, SOAPY_SDR_RX, 0, &range_size);
     if (!sample_rate_ranges)
     {
-        spectrel_print_error("getSampleRateRanges fail: %s\n",
+        spectrel_print_error("getSampleRateRange fail: %s",
                              SoapySDRDevice_lastError());
         goto cleanup;
     }
@@ -196,7 +196,7 @@ spectrel_receiver spectrel_make_receiver(const char *driver,
     if (SoapySDRDevice_setSampleRate(
             receiver->device, SOAPY_SDR_RX, 0, params->sample_rate) != 0)
     {
-        spectrel_print_error("setSampleRate failed: %s\n",
+        spectrel_print_error("setSampleRate failed: %s",
                              SoapySDRDevice_lastError());
         goto cleanup;
     }
@@ -206,14 +206,14 @@ spectrel_receiver spectrel_make_receiver(const char *driver,
         receiver->device, SOAPY_SDR_RX, 0, &range_size);
     if (!bandwidth_ranges)
     {
-        spectrel_print_error("getBandwidthRange failed: %s\n",
+        spectrel_print_error("getBandwidthRange failed: %s",
                              SoapySDRDevice_lastError());
         goto cleanup;
     }
     if (range_size > 0 &&
         !is_value_in_ranges(params->bandwidth, bandwidth_ranges, range_size))
     {
-        spectrel_print_error("Invalid bandwidth: %lf", params->bandwidth);
+        spectrel_print_error("Invalid bandwidth: %lf [Hz]", params->bandwidth);
         goto cleanup;
     }
     if (SoapySDRDevice_setBandwidth(
@@ -228,14 +228,13 @@ spectrel_receiver spectrel_make_receiver(const char *driver,
         SoapySDRDevice_getGainRange(receiver->device, SOAPY_SDR_RX, 0);
     if (!is_value_in_range(params->gain, &gain_range))
     {
-        spectrel_print_error("Invalid gain: %lf", params->gain);
+        spectrel_print_error("Invalid gain: %lf [dB]", params->gain);
         goto cleanup;
     }
     if (SoapySDRDevice_setGain(
             receiver->device, SOAPY_SDR_RX, 0, params->gain) != 0)
     {
-        spectrel_print_error("setGain failed: %s\n",
-                             SoapySDRDevice_lastError());
+        spectrel_print_error("setGain failed: %s", SoapySDRDevice_lastError());
         goto cleanup;
     }
 
@@ -245,13 +244,13 @@ spectrel_receiver spectrel_make_receiver(const char *driver,
         receiver->device, SOAPY_SDR_RX, 0, &num_formats);
     if (!formats)
     {
-        spectrel_print_error("getStreamFormats failed: %s\n",
+        spectrel_print_error("getStreamFormats failed: %s",
                              SoapySDRDevice_lastError());
         goto cleanup;
     }
-    if (!match(format, formats, num_formats))
+    if (num_formats > 0 && !match(format, formats, num_formats))
     {
-        spectrel_print_error("Invalid format: %s\n", format);
+        spectrel_print_error("Invalid format: %s", format);
         goto cleanup;
     }
 
@@ -370,7 +369,7 @@ int spectrel_read_stream(spectrel_receiver receiver, spectrel_signal_t *buffer)
 
             if (ret < 1)
             {
-                spectrel_print_error("readStream failed: %s\n",
+                spectrel_print_error("readStream failed: %s",
                                      SoapySDRDevice_lastError());
                 return SPECTREL_FAILURE;
             }
@@ -404,7 +403,7 @@ int spectrel_read_stream(spectrel_receiver receiver, spectrel_signal_t *buffer)
             if (ret < 1)
             {
                 const char *error = SoapySDRDevice_lastError();
-                spectrel_print_error("readStream failed: %s\n", error);
+                spectrel_print_error("readStream failed: %s", error);
                 free(buffer_cf32);
                 buffer_cf32 = NULL;
                 return SPECTREL_FAILURE;
