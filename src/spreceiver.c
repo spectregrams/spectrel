@@ -117,8 +117,7 @@ spectrel_receiver spectrel_make_receiver(const char *driver,
 
     int status = SPECTREL_FAILURE;
 
-    spectrel_receiver receiver = NULL;
-    receiver = malloc(sizeof(*receiver));
+    spectrel_receiver receiver = malloc(sizeof(*receiver));
     if (!receiver)
     {
         spectrel_print_error("malloc failed: receiver");
