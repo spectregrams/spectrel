@@ -231,6 +231,13 @@ spectrel_receiver spectrel_make_receiver(const char *driver,
         spectrel_print_error("Invalid gain: %lf", params->gain);
         goto cleanup;
     }
+    if (SoapySDRDevice_setGain(
+            receiver->device, SOAPY_SDR_RX, 0, params->gain) != 0)
+    {
+        spectrel_print_error("setGain failed: %s\n",
+                             SoapySDRDevice_lastError());
+        goto cleanup;
+    }
 
     // TODO: Make the stream format configurable.
     const char *format = get_format(driver);
